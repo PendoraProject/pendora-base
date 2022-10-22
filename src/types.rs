@@ -59,7 +59,7 @@ pub enum Value {
 pub enum RequestType {
     GET,
     POST,
-    UPDATE,
+    PATCH,
     DELETE,
 }
 // Option<String> to support parsing aliases

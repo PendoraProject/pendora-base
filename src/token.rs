@@ -10,7 +10,7 @@ pub enum Token {
     Split(char),
 }
 
-pub fn tokenise(input: String) -> Result<Vec<Token>, String> {
+pub fn tokenise(input: String) -> Vec<Token> {
     let mut cursor = input.chars().peekable();
     let mut result: Vec<Token> = Vec::new();
 
@@ -71,7 +71,7 @@ pub fn tokenise(input: String) -> Result<Vec<Token>, String> {
         }
     }
 
-    Ok(result)
+    result
 }
 
 fn get_number<T: Iterator<Item = char>>(c: char, iter: &mut Peekable<T>) -> u32 {

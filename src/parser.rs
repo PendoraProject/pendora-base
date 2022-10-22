@@ -1,59 +1,78 @@
+use std::error::Error;
 use std::{collections::HashMap, fs::read_to_string};
-
 use walkdir::WalkDir;
 
-use crate::{
-    token::{tokenise, Token},
-    types::*,
-};
+use crate::{errors::*, token::*, types::*};
 
-pub fn parse_project(root: &str) -> Result<Project, String> {
+pub fn parse_project(root: &str) -> Result<Project, Box<dyn Error>> {
     let mut global: Option<Global> = None;
     let mut objects: HashMap<String, Object> = HashMap::new();
     let mut methods: HashMap<String, Method> = HashMap::new();
 
     for entry in WalkDir::new(root) {
-        let entry = entry.unwrap();
+        let entry = entry?;
         let path = entry.path();
         let file_name = entry.file_name().to_str().unwrap();
 
         if entry.file_type().is_file() && file_name.ends_with(".pendora") {
             println!("{}", path.display());
 
-            let input = read_to_string(path).unwrap();
+            let input = read_to_string(path)?;
 
-            let tokens = tokenise(input).unwrap();
-            let tokens_cp = tokens.clone();
+            let tokens = tokenise(input);
 
-            match &tokens_cp[0] {
+            match &tokens[0] {
                 Token::Word(w) => match w.as_str() {
-                    "Global" => global = Some(parse_global(tokens).unwrap()),
+                    "Global" => global = Some(parse_global(tokens)?),
                     "Method" => {
-                        let method = parse_method(tokens).unwrap();
+                        let method = parse_method(tokens)?;
                         let method_name = &method.name;
                         methods.insert(method_name.to_string(), method);
                     }
                     "Object" => {
-                        let object = parse_object(tokens).unwrap();
+                        let object = parse_object(tokens)?;
                         let object_name = &object.name;
                         objects.insert(object_name.to_string(), object);
                     }
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_project first token invalid word)",
-                        ))
+                        return Err(Box::new(ParserError::InvalidSymbolBody {
+                            location: ParserErrorLocation::Project {
+                                file_name: path.display().to_string(),
+                            },
+                            incorrect_symbol: Token::Word(w.to_string()),
+                            valid_symbols: vec![
+                                "Global".to_string(),
+                                "Object".to_string(),
+                                "Method".to_string(),
+                            ],
+                        }))
                     }
                 },
                 _ => {
-                    return Err(String::from(
-                        "Invalid syntax (parse_project first token not word)",
-                    ))
+                    let incorrect = tokens[0].clone();
+                    return Err(Box::new(ParserError::MisplacedSymbol {
+                        location: ParserErrorLocation::Project {
+                            file_name: path.display().to_string(),
+                        },
+                        incorrect_symbol: incorrect,
+                        correct_symbol: Token::Word(String::new()),
+                    }));
                 }
             }
         }
     }
 
-    let true_global = global.unwrap();
+    let true_global = match global {
+        Some(g) => g,
+        None => {
+            return Err(Box::new(ParserError::FieldNotExistent {
+                location: ParserErrorLocation::Project {
+                    file_name: String::from("entire project"),
+                },
+                missing_field: String::from("Global"),
+            }))
+        }
+    };
 
     Ok(Project {
         global: true_global,
@@ -62,7 +81,7 @@ pub fn parse_project(root: &str) -> Result<Project, String> {
     })
 }
 
-pub fn parse_method(input: Vec<Token>) -> Result<Method, String> {
+pub fn parse_method(input: Vec<Token>) -> Result<Method, Box<dyn Error>> {
     let name: String;
     let arguments: MethodArguments;
     let route: String;
@@ -72,19 +91,37 @@ pub fn parse_method(input: Vec<Token>) -> Result<Method, String> {
     let return_object: String;
 
     let mut cursor = input.into_iter().peekable();
-    if cursor.next().unwrap() != Token::Word(String::from("Method")) {
-        return Err(String::from("Type mismatch"));
+    if cursor.peek().unwrap() != &Token::Word(String::from("Method")) {
+        return Err(Box::new(ParserError::InvalidSymbolBody {
+            location: ParserErrorLocation::Method,
+            incorrect_symbol: cursor.peek().unwrap().clone(),
+            valid_symbols: vec!["Method".to_string()],
+        }));
     }
+    cursor.next();
 
     // destructure name
-    match cursor.next().unwrap() {
+    match cursor.peek().unwrap().clone() {
         Token::Word(w) => name = w,
-        _ => return Err(String::from("Invalid syntax")),
+        _ => {
+            return Err(Box::new(ParserError::MisplacedSymbol {
+                location: ParserErrorLocation::Method,
+                incorrect_symbol: cursor.peek().unwrap().clone(),
+                correct_symbol: Token::Word(String::from("method_name")),
+            }))
+        }
     }
+    cursor.next();
 
-    if cursor.next().unwrap() != Token::Encapsulator('(') {
-        return Err(String::from("Invalid syntax"));
+    if cursor.peek().unwrap() != &Token::Encapsulator('(') {
+        return Err(Box::new(ParserError::PoorClosure {
+            location: ParserErrorLocation::Method,
+            incorrect_encap: cursor.peek().unwrap().clone(),
+            correct_encap: Token::Encapsulator('('),
+        }));
     }
+    cursor.next();
+
     let mut arg_internal: Vec<Token> = Vec::new();
     loop {
         let t = cursor.peek().unwrap();
@@ -99,11 +136,17 @@ pub fn parse_method(input: Vec<Token>) -> Result<Method, String> {
             }
         }
     }
-    arguments = parse_method_arguments(arg_internal).unwrap();
+    arguments = parse_method_arguments(arg_internal)?;
 
-    if cursor.next().unwrap() != Token::Encapsulator('{') {
-        return Err(String::from("Invalid syntax"));
+    if cursor.peek().unwrap() != &Token::Encapsulator('{') {
+        return Err(Box::new(ParserError::PoorClosure {
+            location: ParserErrorLocation::Method,
+            incorrect_encap: cursor.peek().unwrap().clone(),
+            correct_encap: Token::Encapsulator('{'),
+        }));
     }
+    cursor.next();
+
     let mut method_internal: Vec<Token> = Vec::new();
     loop {
         let t = cursor.peek().unwrap();
@@ -120,7 +163,7 @@ pub fn parse_method(input: Vec<Token>) -> Result<Method, String> {
         }
     }
 
-    let internal = parse_method_internal(method_internal).unwrap();
+    let internal = parse_method_internal(method_internal)?;
 
     route = internal.route;
     request_shape = internal.request_shape;
@@ -139,7 +182,7 @@ pub fn parse_method(input: Vec<Token>) -> Result<Method, String> {
     })
 }
 
-fn parse_method_arguments(input: Vec<Token>) -> Result<MethodArguments, String> {
+fn parse_method_arguments(input: Vec<Token>) -> Result<MethodArguments, Box<dyn Error>> {
     let mut result = MethodArguments::new();
     for chunk in input.chunks(3) {
         let arg_name: String;
@@ -149,25 +192,31 @@ fn parse_method_arguments(input: Vec<Token>) -> Result<MethodArguments, String> 
                 match &chunk[0] {
                     Token::Word(w) => arg_type = parse_type(w.to_string()).unwrap(),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_method_arguments, chunk.len: 3)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::MethodArguments,
+                            incorrect_symbol: chunk[0].clone(),
+                            correct_symbol: Token::Word(String::from("argument_type")),
+                        }));
                     }
                 }
                 match &chunk[1] {
                     Token::Word(w) => arg_name = w.to_string(),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_method_arguments, chunk.len: 3)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::MethodArguments,
+                            incorrect_symbol: chunk[1].clone(),
+                            correct_symbol: Token::Word(String::from("argument_name")),
+                        }));
                     }
                 }
                 match &chunk[2] {
                     Token::Split(',') => {}
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_method_arguments, chunk.len: 3)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::MethodArguments,
+                            incorrect_symbol: chunk[2].clone(),
+                            correct_symbol: Token::Split(','),
+                        }))
                     }
                 }
             }
@@ -175,21 +224,31 @@ fn parse_method_arguments(input: Vec<Token>) -> Result<MethodArguments, String> 
                 match &chunk[0] {
                     Token::Word(w) => arg_type = parse_type(w.to_string()).unwrap(),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_method_arguments, chunk.len: 2)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::MethodArguments,
+                            incorrect_symbol: chunk[0].clone(),
+                            correct_symbol: Token::Word(String::from("argument_type")),
+                        }));
                     }
                 }
                 match &chunk[1] {
                     Token::Word(w) => arg_name = w.to_string(),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_method_arguments, chunk.len: 2)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::MethodArguments,
+                            incorrect_symbol: chunk[1].clone(),
+                            correct_symbol: Token::Word(String::from("argument_name")),
+                        }));
                     }
                 }
             }
-            _ => return Err(String::from("Length mismatch")),
+            _ => {
+                return Err(Box::new(ParserError::BadLength {
+                    location: ParserErrorLocation::MethodArguments,
+                    incorrect_length: chunk.len(),
+                    valid_lengths: vec![3, 2],
+                }));
+            }
         }
         result.insert(arg_name, arg_type);
     }
@@ -205,7 +264,7 @@ struct MethodInternal {
     return_object: String,
 }
 
-fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, String> {
+fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, Box<dyn Error>> {
     let mut route: String = String::new();
     let mut request_shape: RequestShape = RequestShape::new();
     let mut request_type: RequestType = RequestType::GET;
@@ -217,18 +276,26 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, String> {
     match cursor.peek().unwrap() {
         Token::Word(_) => {}
         _ => {
-            return Err(String::from("Type mismatch"));
+            return Err(Box::new(ParserError::MisplacedSymbol {
+                location: ParserErrorLocation::MethodInternal,
+                incorrect_symbol: cursor.peek().unwrap().to_owned(),
+                correct_symbol: Token::Word(String::from("")),
+            }));
         }
     }
 
-    while let Some(Token::Word(w)) = cursor.next() {
+    while let Some(Token::Word(w)) = cursor.peek() {
         match w.as_str() {
             "route" => {
-                if cursor.next().unwrap() != Token::Encapsulator('(') {
-                    return Err(String::from(
-                        "Invalid syntax (parse_method_internal route encap check)",
-                    ));
+                cursor.next();
+                if cursor.peek().unwrap() != &Token::Encapsulator('(') {
+                    return Err(Box::new(ParserError::PoorClosure {
+                        location: ParserErrorLocation::MethodInternal,
+                        incorrect_encap: cursor.peek().unwrap().to_owned(),
+                        correct_encap: Token::Encapsulator('('),
+                    }));
                 }
+                cursor.next();
                 let mut route_internal: Vec<Token> = Vec::new();
                 loop {
                     let t = cursor.peek().unwrap();
@@ -246,18 +313,24 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, String> {
                 match &route_internal[0] {
                     Token::StringLiteral(str_lit) => route = str_lit.to_string(),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_method_internal route not a string literal)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::MethodInternal,
+                            incorrect_symbol: route_internal[0].clone(),
+                            correct_symbol: Token::StringLiteral(String::from("route")),
+                        }))
                     }
                 }
             }
             "request" => {
-                if cursor.next().unwrap() != Token::Encapsulator('<') {
-                    return Err(String::from(
-                        "Invalid syntax (parse_method_internal request encap check)",
-                    ));
+                cursor.next();
+                if cursor.peek().unwrap() != &Token::Encapsulator('<') {
+                    return Err(Box::new(ParserError::PoorClosure {
+                        location: ParserErrorLocation::MethodInternal,
+                        incorrect_encap: cursor.peek().unwrap().to_owned(),
+                        correct_encap: Token::Encapsulator('<'),
+                    }));
                 }
+                cursor.next();
                 let mut request_type_internal: Vec<Token> = Vec::new();
                 loop {
                     let t = cursor.peek().unwrap();
@@ -274,19 +347,24 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, String> {
                 }
 
                 match &request_type_internal[0] {
-                    Token::Word(w) => request_type = parse_request_type(w.to_string()).unwrap(),
+                    Token::Word(w) => request_type = parse_request_type(w.to_string())?,
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_method_internal request not word)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::MethodInternal,
+                            incorrect_symbol: request_type_internal[0].to_owned(),
+                            correct_symbol: Token::Word(String::from("request_type")),
+                        }))
                     }
                 }
 
-                if cursor.next().unwrap() != Token::Encapsulator('(') {
-                    return Err(String::from(
-                        "Invalid syntax (parse_method_internal request encap check)",
-                    ));
+                if cursor.peek().unwrap() != &Token::Encapsulator('(') {
+                    return Err(Box::new(ParserError::PoorClosure {
+                        location: ParserErrorLocation::MethodInternal,
+                        incorrect_encap: cursor.peek().unwrap().to_owned(),
+                        correct_encap: Token::Encapsulator('('),
+                    }));
                 }
+                cursor.next();
                 let mut request_shape_internal: Vec<Token> = Vec::new();
                 loop {
                     let t = cursor.peek().unwrap();
@@ -301,14 +379,18 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, String> {
                         }
                     }
                 }
-                request_shape = parse_request_shape(request_shape_internal).unwrap();
+                request_shape = parse_request_shape(request_shape_internal)?;
             }
             "return" => {
-                if cursor.next().unwrap() != Token::Encapsulator('<') {
-                    return Err(String::from(
-                        "Invalid syntax (parse_method_internal return encap check)",
-                    ));
+                cursor.next();
+                if cursor.peek().unwrap() != &Token::Encapsulator('<') {
+                    return Err(Box::new(ParserError::PoorClosure {
+                        location: ParserErrorLocation::MethodInternal,
+                        incorrect_encap: cursor.peek().unwrap().to_owned(),
+                        correct_encap: Token::Encapsulator('('),
+                    }));
                 }
+                cursor.next();
                 let mut return_object_internal: Vec<Token> = Vec::new();
                 loop {
                     let t = cursor.peek().unwrap();
@@ -326,17 +408,22 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, String> {
                 match &return_object_internal[0] {
                     Token::Word(w) => return_object = w.to_string(),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_method_internal return not word)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::MethodInternal,
+                            incorrect_symbol: return_object_internal[0].to_owned(),
+                            correct_symbol: Token::Word(String::from("return_object")),
+                        }))
                     }
                 }
 
-                if cursor.next().unwrap() != Token::Encapsulator('(') {
-                    return Err(String::from(
-                        "Invalid syntax (parse_method_internal return encap check)",
-                    ));
-                }
+                if cursor.peek().unwrap() != &Token::Encapsulator('(') {
+                    return Err(Box::new(ParserError::PoorClosure {
+                        location: ParserErrorLocation::MethodInternal,
+                        incorrect_encap: cursor.peek().unwrap().to_owned(),
+                        correct_encap: Token::Encapsulator('('),
+                    }));
+                };
+                cursor.next();
                 let mut return_shape_internal: Vec<Token> = Vec::new();
                 loop {
                     let t = cursor.peek().unwrap();
@@ -351,12 +438,18 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, String> {
                         }
                     }
                 }
-                return_shape = parse_return_shape(return_shape_internal).unwrap();
+                return_shape = parse_return_shape(return_shape_internal)?;
             }
             _ => {
-                return Err(String::from(
-                    "Invalid syntax (parse_method_internal invalid function)",
-                ))
+                return Err(Box::new(ParserError::InvalidSymbolBody {
+                    location: ParserErrorLocation::MethodInternal,
+                    incorrect_symbol: cursor.peek().unwrap().to_owned(),
+                    valid_symbols: vec![
+                        "route".to_string(),
+                        "request".to_string(),
+                        "return".to_string(),
+                    ],
+                }));
             }
         }
     }
@@ -370,7 +463,7 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, String> {
     })
 }
 
-fn parse_type(input: String) -> Result<Type, String> {
+fn parse_type(input: String) -> Result<Type, Box<dyn Error>> {
     match input.as_str() {
         "int" | "Integer" => Ok(Type::Integer),
         "bool" | "Boolean" => Ok(Type::Boolean),
@@ -378,29 +471,52 @@ fn parse_type(input: String) -> Result<Type, String> {
         "int?" | "Integer?" => Ok(Type::NullableInteger),
         "bool?" | "Boolean?" => Ok(Type::NullableBoolean),
         "str?" | "String?" => Ok(Type::NullableString),
-        _ => Err(String::from("Invalid type (parse_type)")),
+        _ => Err(Box::new(ParserError::InvalidSymbolBody {
+            location: ParserErrorLocation::Type,
+            incorrect_symbol: Token::Word(input),
+            valid_symbols: vec![
+                "int".to_string(),
+                "bool".to_string(),
+                "str".to_string(),
+                "Integer".to_string(),
+                "Boolean".to_string(),
+                "String".to_string(),
+            ],
+        })),
     }
 }
 
-fn parse_request_type(input: String) -> Result<RequestType, String> {
+fn parse_request_type(input: String) -> Result<RequestType, Box<dyn Error>> {
     match input.as_str() {
         "GET" => Ok(RequestType::GET),
         "POST" => Ok(RequestType::POST),
-        "UPDATE" => Ok(RequestType::UPDATE),
+        "PATCH" => Ok(RequestType::PATCH),
         "DELETE" => Ok(RequestType::DELETE),
-        _ => Err(String::from("Invalid type (parse_request_type)")),
+        _ => Err(Box::new(ParserError::InvalidSymbolBody {
+            location: ParserErrorLocation::RequestType,
+            incorrect_symbol: Token::Word(input),
+            valid_symbols: vec![
+                "GET".to_string(),
+                "POST".to_string(),
+                "PATCH".to_string(),
+                "DELETE".to_string(),
+            ],
+        })),
     }
 }
 
-fn parse_request_shape(input: Vec<Token>) -> Result<RequestShape, String> {
+fn parse_request_shape(input: Vec<Token>) -> Result<RequestShape, Box<dyn Error>> {
     let mut cursor = input.into_iter().peekable();
     let mut result = RequestShape::new();
 
-    if cursor.next().unwrap() != Token::Encapsulator('{') {
-        return Err(String::from(
-            "Invalid syntax (parse_request_shape encap check)",
-        ));
+    if cursor.peek().unwrap() != &Token::Encapsulator('{') {
+        return Err(Box::new(ParserError::PoorClosure {
+            location: ParserErrorLocation::RequestShape,
+            incorrect_encap: cursor.peek().unwrap().to_owned(),
+            correct_encap: Token::Encapsulator('{'),
+        }));
     }
+    cursor.next();
     let mut request_shape_hashmap: Vec<Token> = Vec::new();
     loop {
         let t = cursor.peek().unwrap();
@@ -424,33 +540,41 @@ fn parse_request_shape(input: Vec<Token>) -> Result<RequestShape, String> {
                 match &chunk[0] {
                     Token::Word(w) => key_name = w.to_string(),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_request_shape 4 not word 1)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::RequestShape,
+                            incorrect_symbol: chunk[0].to_owned(),
+                            correct_symbol: Token::Word(String::from("param_name")),
+                        }))
                     }
                 }
                 match &chunk[1] {
                     Token::Split(':') => {}
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_request_shape 4 not split ':')",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::RequestShape,
+                            incorrect_symbol: chunk[1].to_owned(),
+                            correct_symbol: Token::Split(':'),
+                        }))
                     }
                 }
                 match &chunk[2] {
                     Token::Word(w) => value = parse_method_shape_value(w.to_string()),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_request_shape 4 not word 2)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::RequestShape,
+                            incorrect_symbol: chunk[2].to_owned(),
+                            correct_symbol: Token::Word(String::from("param_value")),
+                        }))
                     }
                 }
                 match &chunk[3] {
                     Token::Split(',') => {}
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_request_shape 4 not split ',')",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::RequestShape,
+                            incorrect_symbol: chunk[3].to_owned(),
+                            correct_symbol: Token::Split(','),
+                        }))
                     }
                 }
             }
@@ -458,32 +582,40 @@ fn parse_request_shape(input: Vec<Token>) -> Result<RequestShape, String> {
                 match &chunk[0] {
                     Token::Word(w) => key_name = w.to_string(),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_request_shape 3 not word 1)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::RequestShape,
+                            incorrect_symbol: chunk[0].to_owned(),
+                            correct_symbol: Token::Word(String::from("param_name")),
+                        }))
                     }
                 }
                 match &chunk[1] {
                     Token::Split(':') => {}
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_request_shape 3 not split ':')",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::RequestShape,
+                            incorrect_symbol: chunk[1].to_owned(),
+                            correct_symbol: Token::Split(':'),
+                        }))
                     }
                 }
                 match &chunk[2] {
                     Token::Word(w) => value = parse_method_shape_value(w.to_string()),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_request_shape 3 not word 2)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::RequestShape,
+                            incorrect_symbol: chunk[2].to_owned(),
+                            correct_symbol: Token::Word(String::from("param_value")),
+                        }))
                     }
                 }
             }
             _ => {
-                return Err(String::from(
-                    "Invalid syntax (parse_request_shape chunk length)",
-                ))
+                return Err(Box::new(ParserError::BadLength {
+                    location: ParserErrorLocation::RequestShape,
+                    incorrect_length: chunk.len(),
+                    valid_lengths: vec![4, 3],
+                }))
             }
         }
         result.insert(key_name, value);
@@ -504,15 +636,18 @@ fn parse_method_shape_value(input: String) -> Value {
     }
 }
 
-fn parse_return_shape(input: Vec<Token>) -> Result<ReturnShape, String> {
+fn parse_return_shape(input: Vec<Token>) -> Result<ReturnShape, Box<dyn Error>> {
     let mut cursor = input.into_iter().peekable();
     let mut result = ReturnShape::new();
 
-    if cursor.next().unwrap() != Token::Encapsulator('{') {
-        return Err(String::from(
-            "Invalid syntax (parse_return_shape encap check)",
-        ));
+    if cursor.peek().unwrap() != &Token::Encapsulator('{') {
+        return Err(Box::new(ParserError::PoorClosure {
+            location: ParserErrorLocation::ReturnShape,
+            incorrect_encap: cursor.peek().unwrap().to_owned(),
+            correct_encap: Token::Encapsulator('{'),
+        }));
     }
+    cursor.next();
     let mut return_shape_hashmap: Vec<Token> = Vec::new();
     loop {
         let t = cursor.peek().unwrap();
@@ -537,9 +672,11 @@ fn parse_return_shape(input: Vec<Token>) -> Result<ReturnShape, String> {
                     result.insert(w.to_string(), None);
                 }
                 _ => {
-                    return Err(String::from(
-                        "Invalid syntax (parse_return_shape 1 not word)",
-                    ))
+                    return Err(Box::new(ParserError::MisplacedSymbol {
+                        location: ParserErrorLocation::ReturnShape,
+                        incorrect_symbol: chunk[0].to_owned(),
+                        correct_symbol: Token::Word(String::from("return_value")),
+                    }))
                 }
             },
             3 => {
@@ -548,25 +685,33 @@ fn parse_return_shape(input: Vec<Token>) -> Result<ReturnShape, String> {
                 match &chunk[0] {
                     Token::Word(w) => value = w.to_string(),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_return_shape 3 not word 1)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::ReturnShape,
+                            incorrect_symbol: chunk[0].to_owned(),
+                            correct_symbol: Token::Word(String::from("return_value")),
+                        }))
                     }
                 }
                 match &chunk[1] {
                     Token::Split(':') => {}
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_return_shape 3 not split ':')",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::ReturnShape,
+                            incorrect_symbol: chunk[1].to_owned(),
+                            correct_symbol: Token::Split(':'),
+                        }))
                     }
                 }
                 match &chunk[2] {
                     Token::StringLiteral(str_lit) => value_alias = str_lit.to_string(),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_return_shape 3 not word 2)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::ReturnShape,
+                            incorrect_symbol: chunk[2].to_owned(),
+                            correct_symbol: Token::StringLiteral(String::from(
+                                "return_value_alias",
+                            )),
+                        }))
                     }
                 }
 
@@ -574,9 +719,11 @@ fn parse_return_shape(input: Vec<Token>) -> Result<ReturnShape, String> {
             }
             0 => {}
             _ => {
-                return Err(String::from(
-                    "Invalid syntax (parse_return_shape bad chunk length)",
-                ))
+                return Err(Box::new(ParserError::BadLength {
+                    location: ParserErrorLocation::ReturnShape,
+                    incorrect_length: chunk.len(),
+                    valid_lengths: vec![3, 1, 0],
+                }))
             }
         }
     }
@@ -584,24 +731,41 @@ fn parse_return_shape(input: Vec<Token>) -> Result<ReturnShape, String> {
     Ok(result)
 }
 
-pub fn parse_object(input: Vec<Token>) -> Result<Object, String> {
+pub fn parse_object(input: Vec<Token>) -> Result<Object, Box<dyn Error>> {
     let name: String;
     let mut shape: ObjectShape = ObjectShape::new();
     let mut methods: Vec<String> = Vec::new();
 
     let mut cursor = input.into_iter().peekable();
-    if cursor.next().unwrap() != Token::Word(String::from("Object")) {
-        return Err(String::from("Type mismatch"));
+    if cursor.peek().unwrap() != &Token::Word(String::from("Object")) {
+        return Err(Box::new(ParserError::InvalidSymbolBody {
+            location: ParserErrorLocation::Object,
+            incorrect_symbol: cursor.peek().unwrap().to_owned(),
+            valid_symbols: vec!["Object".to_string()],
+        }));
     }
+    cursor.next();
 
-    match cursor.next().unwrap() {
-        Token::Word(w) => name = w,
-        _ => return Err(String::from("Invalid syntax")),
+    match cursor.peek().unwrap() {
+        Token::Word(w) => name = w.to_owned(),
+        _ => {
+            return Err(Box::new(ParserError::MisplacedSymbol {
+                location: ParserErrorLocation::Object,
+                incorrect_symbol: cursor.peek().unwrap().to_owned(),
+                correct_symbol: Token::Word(String::from("object_name")),
+            }))
+        }
     }
+    cursor.next();
 
-    if cursor.next().unwrap() != Token::Encapsulator('{') {
-        return Err(String::from("Invalid syntax"));
+    if cursor.peek().unwrap() != &Token::Encapsulator('{') {
+        return Err(Box::new(ParserError::PoorClosure {
+            location: ParserErrorLocation::Object,
+            incorrect_encap: cursor.peek().unwrap().to_owned(),
+            correct_encap: Token::Encapsulator('{'),
+        }));
     }
+    cursor.next();
     let mut internal: Vec<Token> = Vec::new();
     loop {
         let t = cursor.peek().unwrap();
@@ -622,18 +786,27 @@ pub fn parse_object(input: Vec<Token>) -> Result<Object, String> {
     match internal_cursor.peek().unwrap() {
         Token::Word(_) => {}
         _ => {
-            return Err(String::from("Type mismatch"));
+            return Err(Box::new(ParserError::MisplacedSymbol {
+                location: ParserErrorLocation::Object,
+                incorrect_symbol: internal_cursor.peek().unwrap().to_owned(),
+                correct_symbol: Token::Word(String::from("function")),
+            }));
         }
     }
+    internal_cursor.next();
 
-    while let Some(Token::Word(w)) = internal_cursor.next() {
+    while let Some(Token::Word(w)) = internal_cursor.peek() {
         match w.as_str() {
             "shape" => {
-                if internal_cursor.next().unwrap() != Token::Encapsulator('(') {
-                    return Err(String::from(
-                        "Invalid syntax (parse_object shape encap check)",
-                    ));
+                internal_cursor.next();
+                if internal_cursor.peek().unwrap() != &Token::Encapsulator('(') {
+                    return Err(Box::new(ParserError::PoorClosure {
+                        location: ParserErrorLocation::Object,
+                        incorrect_encap: internal_cursor.peek().unwrap().to_owned(),
+                        correct_encap: Token::Encapsulator('('),
+                    }));
                 }
+                internal_cursor.next();
                 let mut shape_internal: Vec<Token> = Vec::new();
                 loop {
                     let t = internal_cursor.peek().unwrap();
@@ -648,14 +821,18 @@ pub fn parse_object(input: Vec<Token>) -> Result<Object, String> {
                         }
                     }
                 }
-                shape = parse_object_shape(shape_internal).unwrap();
+                shape = parse_object_shape(shape_internal)?;
             }
             "methods" => {
-                if internal_cursor.next().unwrap() != Token::Encapsulator('(') {
-                    return Err(String::from(
-                        "Invalid syntax (parse_object methods encap check)",
-                    ));
+                internal_cursor.next();
+                if internal_cursor.peek().unwrap() != &Token::Encapsulator('(') {
+                    return Err(Box::new(ParserError::PoorClosure {
+                        location: ParserErrorLocation::Object,
+                        incorrect_encap: internal_cursor.peek().unwrap().to_owned(),
+                        correct_encap: Token::Encapsulator('('),
+                    }));
                 }
+                internal_cursor.next();
                 let mut methods_internal: Vec<Token> = Vec::new();
                 loop {
                     let t = internal_cursor.peek().unwrap();
@@ -670,12 +847,14 @@ pub fn parse_object(input: Vec<Token>) -> Result<Object, String> {
                         }
                     }
                 }
-                methods = parse_object_methods(methods_internal).unwrap();
+                methods = parse_object_methods(methods_internal)?;
             }
             _ => {
-                return Err(String::from(
-                    "Invalid syntax (parse_object invalid function)",
-                ))
+                return Err(Box::new(ParserError::InvalidSymbolBody {
+                    location: ParserErrorLocation::Object,
+                    incorrect_symbol: internal_cursor.peek().unwrap().to_owned(),
+                    valid_symbols: vec!["shape".to_string(), "methods".to_string()],
+                }))
             }
         }
     }
@@ -687,15 +866,18 @@ pub fn parse_object(input: Vec<Token>) -> Result<Object, String> {
     })
 }
 
-fn parse_object_methods(input: Vec<Token>) -> Result<Vec<String>, String> {
+fn parse_object_methods(input: Vec<Token>) -> Result<Vec<String>, Box<dyn Error>> {
     let mut cursor = input.into_iter().peekable();
     let mut result: Vec<String> = Vec::new();
 
-    if cursor.next().unwrap() != Token::Encapsulator('[') {
-        return Err(String::from(
-            "Invalid syntax (parse_object_methods encap check)",
-        ));
+    if cursor.peek().unwrap() != &Token::Encapsulator('[') {
+        return Err(Box::new(ParserError::PoorClosure {
+            location: ParserErrorLocation::ObjectMethods,
+            incorrect_encap: cursor.peek().unwrap().to_owned(),
+            correct_encap: Token::Encapsulator('['),
+        }));
     }
+    cursor.next();
     let mut object_methods_internal: Vec<Token> = Vec::new();
     loop {
         let t = cursor.peek().unwrap();
@@ -717,32 +899,40 @@ fn parse_object_methods(input: Vec<Token>) -> Result<Vec<String>, String> {
                 match &chunk[0] {
                     Token::Word(w) => result.push(w.to_string()),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_object_methods 2 not word)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::ObjectMethods,
+                            incorrect_symbol: chunk[0].to_owned(),
+                            correct_symbol: Token::Word(String::from("method_name")),
+                        }))
                     }
                 }
                 match &chunk[1] {
                     Token::Split(',') => {}
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_object_methods 2 not split ',')",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::ObjectMethods,
+                            incorrect_symbol: chunk[1].to_owned(),
+                            correct_symbol: Token::Split(','),
+                        }))
                     }
                 }
             }
             1 => match &chunk[0] {
                 Token::Word(w) => result.push(w.to_string()),
                 _ => {
-                    return Err(String::from(
-                        "Invalid syntax (parse_object_methods 1 not word)",
-                    ))
+                    return Err(Box::new(ParserError::MisplacedSymbol {
+                        location: ParserErrorLocation::ObjectMethods,
+                        incorrect_symbol: chunk[0].to_owned(),
+                        correct_symbol: Token::Word(String::from("method_name")),
+                    }))
                 }
             },
             _ => {
-                return Err(String::from(
-                    "Invalid syntax (parse_object_methods bad length)",
-                ))
+                return Err(Box::new(ParserError::BadLength {
+                    location: ParserErrorLocation::ObjectMethods,
+                    incorrect_length: chunk.len(),
+                    valid_lengths: vec![2, 1],
+                }))
             }
         }
     }
@@ -750,15 +940,18 @@ fn parse_object_methods(input: Vec<Token>) -> Result<Vec<String>, String> {
     Ok(result)
 }
 
-fn parse_object_shape(input: Vec<Token>) -> Result<ObjectShape, String> {
+fn parse_object_shape(input: Vec<Token>) -> Result<ObjectShape, Box<dyn Error>> {
     let mut cursor = input.into_iter().peekable();
     let mut result = ObjectShape::new();
 
-    if cursor.next().unwrap() != Token::Encapsulator('{') {
-        return Err(String::from(
-            "Invalid syntax (parse_object_shape encap check)",
-        ));
+    if cursor.peek().unwrap() != &Token::Encapsulator('{') {
+        return Err(Box::new(ParserError::PoorClosure {
+            location: ParserErrorLocation::ObjectShape,
+            incorrect_encap: cursor.peek().unwrap().to_owned(),
+            correct_encap: Token::Encapsulator('{'),
+        }));
     }
+    cursor.next();
     let mut object_shape_hashmap: Vec<Token> = Vec::new();
     loop {
         let t = cursor.peek().unwrap();
@@ -782,33 +975,41 @@ fn parse_object_shape(input: Vec<Token>) -> Result<ObjectShape, String> {
                 match &chunk[0] {
                     Token::Word(w) => name = w.to_string(),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_object_shape 4 not word 1)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::ObjectShape,
+                            incorrect_symbol: chunk[0].to_owned(),
+                            correct_symbol: Token::Word(String::from("object_shape_name")),
+                        }))
                     }
                 }
                 match &chunk[1] {
                     Token::Split(':') => {}
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_object_shape 4 not split ':')",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::ObjectShape,
+                            incorrect_symbol: chunk[1].to_owned(),
+                            correct_symbol: Token::Split(':'),
+                        }))
                     }
                 }
                 match &chunk[2] {
-                    Token::Word(w) => val_type = parse_type(w.to_string()).unwrap(),
+                    Token::Word(w) => val_type = parse_type(w.to_string())?,
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_object_shape 4 not word 2)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::ObjectShape,
+                            incorrect_symbol: chunk[2].to_owned(),
+                            correct_symbol: Token::Word(String::from("object_shape_type")),
+                        }))
                     }
                 }
                 match &chunk[3] {
                     Token::Split(',') => {}
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_object_shape 4 not split ',')",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::ObjectShape,
+                            incorrect_symbol: chunk[3].to_owned(),
+                            correct_symbol: Token::Split(','),
+                        }))
                     }
                 }
             }
@@ -816,32 +1017,40 @@ fn parse_object_shape(input: Vec<Token>) -> Result<ObjectShape, String> {
                 match &chunk[0] {
                     Token::Word(w) => name = w.to_string(),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_object_shape 3 not word 1)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::ObjectShape,
+                            incorrect_symbol: chunk[0].to_owned(),
+                            correct_symbol: Token::Word(String::from("object_shape_name")),
+                        }))
                     }
                 }
                 match &chunk[1] {
                     Token::Split(':') => {}
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_object_shape 3 not split ':')",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::ObjectShape,
+                            incorrect_symbol: chunk[1].to_owned(),
+                            correct_symbol: Token::Split(':'),
+                        }))
                     }
                 }
                 match &chunk[2] {
-                    Token::Word(w) => val_type = parse_type(w.to_string()).unwrap(),
+                    Token::Word(w) => val_type = parse_type(w.to_string())?,
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_object_shape 3 not word 2)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::ObjectShape,
+                            incorrect_symbol: chunk[2].to_owned(),
+                            correct_symbol: Token::Word(String::from("object_shape_type")),
+                        }))
                     }
                 }
             }
             _ => {
-                return Err(String::from(
-                    "Invalid syntax (parse_object_shape chunk length)",
-                ))
+                return Err(Box::new(ParserError::BadLength {
+                    location: ParserErrorLocation::ObjectShape,
+                    incorrect_length: chunk.len(),
+                    valid_lengths: vec![4, 3],
+                }))
             }
         }
         result.insert(name, val_type);
@@ -850,25 +1059,42 @@ fn parse_object_shape(input: Vec<Token>) -> Result<ObjectShape, String> {
     Ok(result)
 }
 
-pub fn parse_global(input: Vec<Token>) -> Result<Global, String> {
+pub fn parse_global(input: Vec<Token>) -> Result<Global, Box<dyn Error>> {
     let name: String;
     let mut head_route: String = String::new();
     let mut shape: ObjectShape = ObjectShape::new();
     let mut methods: Vec<String> = Vec::new();
 
     let mut cursor = input.into_iter().peekable();
-    if cursor.next().unwrap() != Token::Word(String::from("Global")) {
-        return Err(String::from("Type mismatch"));
+    if cursor.peek().unwrap() != &Token::Word(String::from("Global")) {
+        return Err(Box::new(ParserError::InvalidSymbolBody {
+            location: ParserErrorLocation::Global,
+            incorrect_symbol: cursor.peek().unwrap().to_owned(),
+            valid_symbols: vec!["Global".to_string()],
+        }));
     }
+    cursor.next();
 
-    match cursor.next().unwrap() {
-        Token::Word(w) => name = w,
-        _ => return Err(String::from("Invalid syntax 1 ")),
+    match cursor.peek().unwrap() {
+        Token::Word(w) => name = w.to_owned(),
+        _ => {
+            return Err(Box::new(ParserError::MisplacedSymbol {
+                location: ParserErrorLocation::Global,
+                incorrect_symbol: cursor.peek().unwrap().to_owned(),
+                correct_symbol: Token::Word(String::from("global_object_name")),
+            }))
+        }
     }
+    cursor.next();
 
-    if cursor.next().unwrap() != Token::Encapsulator('{') {
-        return Err(String::from("Invalid syntax 2"));
+    if cursor.peek().unwrap() != &Token::Encapsulator('{') {
+        return Err(Box::new(ParserError::PoorClosure {
+            location: ParserErrorLocation::Global,
+            incorrect_encap: cursor.peek().unwrap().to_owned(),
+            correct_encap: Token::Encapsulator('{'),
+        }));
     }
+    cursor.next();
     let mut internal: Vec<Token> = Vec::new();
     loop {
         let t = cursor.peek().unwrap();
@@ -889,18 +1115,26 @@ pub fn parse_global(input: Vec<Token>) -> Result<Global, String> {
     match internal_cursor.peek().unwrap() {
         Token::Word(_) => {}
         _ => {
-            return Err(String::from("Type mismatch"));
+            return Err(Box::new(ParserError::MisplacedSymbol {
+                location: ParserErrorLocation::Global,
+                incorrect_symbol: internal_cursor.peek().unwrap().to_owned(),
+                correct_symbol: Token::Word(String::from("function")),
+            }));
         }
     }
 
-    while let Some(Token::Word(w)) = internal_cursor.next() {
+    while let Some(Token::Word(w)) = internal_cursor.peek() {
         match w.as_str() {
             "headRoute" => {
-                if internal_cursor.next().unwrap() != Token::Encapsulator('(') {
-                    return Err(String::from(
-                        "Invalid syntax (parse_method_internal route encap check)",
-                    ));
+                internal_cursor.next();
+                if internal_cursor.peek().unwrap() != &Token::Encapsulator('(') {
+                    return Err(Box::new(ParserError::PoorClosure {
+                        location: ParserErrorLocation::Global,
+                        incorrect_encap: internal_cursor.peek().unwrap().to_owned(),
+                        correct_encap: Token::Encapsulator('('),
+                    }));
                 }
+                internal_cursor.next();
                 let mut route_internal: Vec<Token> = Vec::new();
                 loop {
                     let t = internal_cursor.peek().unwrap();
@@ -918,18 +1152,24 @@ pub fn parse_global(input: Vec<Token>) -> Result<Global, String> {
                 match &route_internal[0] {
                     Token::StringLiteral(str_lit) => head_route = str_lit.to_string(),
                     _ => {
-                        return Err(String::from(
-                            "Invalid syntax (parse_global head_route not a string literal)",
-                        ))
+                        return Err(Box::new(ParserError::MisplacedSymbol {
+                            location: ParserErrorLocation::Global,
+                            incorrect_symbol: route_internal[0].to_owned(),
+                            correct_symbol: Token::StringLiteral(String::from("head_route")),
+                        }))
                     }
                 }
             }
             "shape" => {
-                if internal_cursor.next().unwrap() != Token::Encapsulator('(') {
-                    return Err(String::from(
-                        "Invalid syntax (parse_object shape encap check)",
-                    ));
+                internal_cursor.next();
+                if internal_cursor.peek().unwrap() != &Token::Encapsulator('(') {
+                    return Err(Box::new(ParserError::PoorClosure {
+                        location: ParserErrorLocation::Global,
+                        incorrect_encap: internal_cursor.peek().unwrap().to_owned(),
+                        correct_encap: Token::Encapsulator('('),
+                    }));
                 }
+                internal_cursor.next();
                 let mut shape_internal: Vec<Token> = Vec::new();
                 loop {
                     let t = internal_cursor.peek().unwrap();
@@ -944,14 +1184,18 @@ pub fn parse_global(input: Vec<Token>) -> Result<Global, String> {
                         }
                     }
                 }
-                shape = parse_object_shape(shape_internal).unwrap();
+                shape = parse_object_shape(shape_internal)?;
             }
             "methods" => {
-                if internal_cursor.next().unwrap() != Token::Encapsulator('(') {
-                    return Err(String::from(
-                        "Invalid syntax (parse_object methods encap check)",
-                    ));
+                internal_cursor.next();
+                if internal_cursor.peek().unwrap() != &Token::Encapsulator('(') {
+                    return Err(Box::new(ParserError::PoorClosure {
+                        location: ParserErrorLocation::Global,
+                        incorrect_encap: internal_cursor.peek().unwrap().to_owned(),
+                        correct_encap: Token::Encapsulator('('),
+                    }));
                 }
+                internal_cursor.next();
                 let mut methods_internal: Vec<Token> = Vec::new();
                 loop {
                     let t = internal_cursor.peek().unwrap();
@@ -966,12 +1210,18 @@ pub fn parse_global(input: Vec<Token>) -> Result<Global, String> {
                         }
                     }
                 }
-                methods = parse_object_methods(methods_internal).unwrap();
+                methods = parse_object_methods(methods_internal)?;
             }
             _ => {
-                return Err(String::from(
-                    "Invalid syntax (parse_object invalid function)",
-                ))
+                return Err(Box::new(ParserError::InvalidSymbolBody {
+                    location: ParserErrorLocation::Global,
+                    incorrect_symbol: internal_cursor.peek().unwrap().to_owned(),
+                    valid_symbols: vec![
+                        "headRoute".to_string(),
+                        "methods".to_string(),
+                        "shape".to_string(),
+                    ],
+                }))
             }
         }
     }
