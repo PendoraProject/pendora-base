@@ -1,23 +1,22 @@
-use std::error::Error;
 use std::{collections::HashMap, fs::read_to_string};
 use walkdir::WalkDir;
 
 use crate::{errors::*, token::*, types::*};
 
-pub fn parse_project(root: &str) -> Result<Project, Box<dyn Error>> {
+pub fn parse_project(root: &str) -> Result<Project, ParserError> {
     let mut global: Option<Global> = None;
     let mut objects: HashMap<String, Object> = HashMap::new();
     let mut methods: HashMap<String, Method> = HashMap::new();
 
     for entry in WalkDir::new(root) {
-        let entry = entry?;
+        let entry = entry.unwrap();
         let path = entry.path();
         let file_name = entry.file_name().to_str().unwrap();
 
         if entry.file_type().is_file() && file_name.ends_with(".pendora") {
             println!("{}", path.display());
 
-            let input = read_to_string(path)?;
+            let input = read_to_string(path).unwrap();
 
             let tokens = tokenise(input);
 
@@ -35,7 +34,7 @@ pub fn parse_project(root: &str) -> Result<Project, Box<dyn Error>> {
                         objects.insert(object_name.to_string(), object);
                     }
                     _ => {
-                        return Err(Box::new(ParserError::InvalidSymbolBody {
+                        return Err(ParserError::InvalidSymbolBody {
                             location: ParserErrorLocation::Project {
                                 file_name: path.display().to_string(),
                             },
@@ -45,18 +44,18 @@ pub fn parse_project(root: &str) -> Result<Project, Box<dyn Error>> {
                                 "Object".to_string(),
                                 "Method".to_string(),
                             ],
-                        }))
+                        })
                     }
                 },
                 _ => {
                     let incorrect = tokens[0].clone();
-                    return Err(Box::new(ParserError::MisplacedSymbol {
+                    return Err(ParserError::MisplacedSymbol {
                         location: ParserErrorLocation::Project {
                             file_name: path.display().to_string(),
                         },
                         incorrect_symbol: incorrect,
                         correct_symbol: Token::Word(String::new()),
-                    }));
+                    });
                 }
             }
         }
@@ -65,12 +64,12 @@ pub fn parse_project(root: &str) -> Result<Project, Box<dyn Error>> {
     let true_global = match global {
         Some(g) => g,
         None => {
-            return Err(Box::new(ParserError::FieldNotExistent {
+            return Err(ParserError::FieldNotExistent {
                 location: ParserErrorLocation::Project {
                     file_name: String::from("entire project"),
                 },
                 missing_field: String::from("Global"),
-            }))
+            })
         }
     };
 
@@ -81,7 +80,7 @@ pub fn parse_project(root: &str) -> Result<Project, Box<dyn Error>> {
     })
 }
 
-pub fn parse_method(input: Vec<Token>) -> Result<Method, Box<dyn Error>> {
+pub fn parse_method(input: Vec<Token>) -> Result<Method, ParserError> {
     let name: String;
     let arguments: MethodArguments;
     let route: String;
@@ -92,11 +91,11 @@ pub fn parse_method(input: Vec<Token>) -> Result<Method, Box<dyn Error>> {
 
     let mut cursor = input.into_iter().peekable();
     if cursor.peek().unwrap() != &Token::Word(String::from("Method")) {
-        return Err(Box::new(ParserError::InvalidSymbolBody {
+        return Err(ParserError::InvalidSymbolBody {
             location: ParserErrorLocation::Method,
             incorrect_symbol: cursor.peek().unwrap().clone(),
             valid_symbols: vec!["Method".to_string()],
-        }));
+        });
     }
     cursor.next();
 
@@ -104,21 +103,21 @@ pub fn parse_method(input: Vec<Token>) -> Result<Method, Box<dyn Error>> {
     match cursor.peek().unwrap().clone() {
         Token::Word(w) => name = w,
         _ => {
-            return Err(Box::new(ParserError::MisplacedSymbol {
+            return Err(ParserError::MisplacedSymbol {
                 location: ParserErrorLocation::Method,
                 incorrect_symbol: cursor.peek().unwrap().clone(),
                 correct_symbol: Token::Word(String::from("method_name")),
-            }))
+            })
         }
     }
     cursor.next();
 
     if cursor.peek().unwrap() != &Token::Encapsulator('(') {
-        return Err(Box::new(ParserError::PoorClosure {
+        return Err(ParserError::PoorClosure {
             location: ParserErrorLocation::Method,
             incorrect_encap: cursor.peek().unwrap().clone(),
             correct_encap: Token::Encapsulator('('),
-        }));
+        });
     }
     cursor.next();
 
@@ -139,11 +138,11 @@ pub fn parse_method(input: Vec<Token>) -> Result<Method, Box<dyn Error>> {
     arguments = parse_method_arguments(arg_internal)?;
 
     if cursor.peek().unwrap() != &Token::Encapsulator('{') {
-        return Err(Box::new(ParserError::PoorClosure {
+        return Err(ParserError::PoorClosure {
             location: ParserErrorLocation::Method,
             incorrect_encap: cursor.peek().unwrap().clone(),
             correct_encap: Token::Encapsulator('{'),
-        }));
+        });
     }
     cursor.next();
 
@@ -182,7 +181,7 @@ pub fn parse_method(input: Vec<Token>) -> Result<Method, Box<dyn Error>> {
     })
 }
 
-fn parse_method_arguments(input: Vec<Token>) -> Result<MethodArguments, Box<dyn Error>> {
+fn parse_method_arguments(input: Vec<Token>) -> Result<MethodArguments, ParserError> {
     let mut result = MethodArguments::new();
     for chunk in input.chunks(3) {
         let arg_name: String;
@@ -192,31 +191,31 @@ fn parse_method_arguments(input: Vec<Token>) -> Result<MethodArguments, Box<dyn 
                 match &chunk[0] {
                     Token::Word(w) => arg_type = parse_type(w.to_string()).unwrap(),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::MethodArguments,
                             incorrect_symbol: chunk[0].clone(),
                             correct_symbol: Token::Word(String::from("argument_type")),
-                        }));
+                        });
                     }
                 }
                 match &chunk[1] {
                     Token::Word(w) => arg_name = w.to_string(),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::MethodArguments,
                             incorrect_symbol: chunk[1].clone(),
                             correct_symbol: Token::Word(String::from("argument_name")),
-                        }));
+                        });
                     }
                 }
                 match &chunk[2] {
                     Token::Split(',') => {}
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::MethodArguments,
                             incorrect_symbol: chunk[2].clone(),
                             correct_symbol: Token::Split(','),
-                        }))
+                        })
                     }
                 }
             }
@@ -224,30 +223,30 @@ fn parse_method_arguments(input: Vec<Token>) -> Result<MethodArguments, Box<dyn 
                 match &chunk[0] {
                     Token::Word(w) => arg_type = parse_type(w.to_string()).unwrap(),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::MethodArguments,
                             incorrect_symbol: chunk[0].clone(),
                             correct_symbol: Token::Word(String::from("argument_type")),
-                        }));
+                        });
                     }
                 }
                 match &chunk[1] {
                     Token::Word(w) => arg_name = w.to_string(),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::MethodArguments,
                             incorrect_symbol: chunk[1].clone(),
                             correct_symbol: Token::Word(String::from("argument_name")),
-                        }));
+                        });
                     }
                 }
             }
             _ => {
-                return Err(Box::new(ParserError::BadLength {
+                return Err(ParserError::BadLength {
                     location: ParserErrorLocation::MethodArguments,
                     incorrect_length: chunk.len(),
                     valid_lengths: vec![3, 2],
-                }));
+                });
             }
         }
         result.insert(arg_name, arg_type);
@@ -264,7 +263,7 @@ struct MethodInternal {
     return_object: String,
 }
 
-fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, Box<dyn Error>> {
+fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, ParserError> {
     let mut route: String = String::new();
     let mut request_shape: RequestShape = RequestShape::new();
     let mut request_type: RequestType = RequestType::GET;
@@ -276,11 +275,11 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, Box<dyn Er
     match cursor.peek().unwrap() {
         Token::Word(_) => {}
         _ => {
-            return Err(Box::new(ParserError::MisplacedSymbol {
+            return Err(ParserError::MisplacedSymbol {
                 location: ParserErrorLocation::MethodInternal,
                 incorrect_symbol: cursor.peek().unwrap().to_owned(),
                 correct_symbol: Token::Word(String::from("")),
-            }));
+            });
         }
     }
 
@@ -289,11 +288,11 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, Box<dyn Er
             "route" => {
                 cursor.next();
                 if cursor.peek().unwrap() != &Token::Encapsulator('(') {
-                    return Err(Box::new(ParserError::PoorClosure {
+                    return Err(ParserError::PoorClosure {
                         location: ParserErrorLocation::MethodInternal,
                         incorrect_encap: cursor.peek().unwrap().to_owned(),
                         correct_encap: Token::Encapsulator('('),
-                    }));
+                    });
                 }
                 cursor.next();
                 let mut route_internal: Vec<Token> = Vec::new();
@@ -313,22 +312,22 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, Box<dyn Er
                 match &route_internal[0] {
                     Token::StringLiteral(str_lit) => route = str_lit.to_string(),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::MethodInternal,
                             incorrect_symbol: route_internal[0].clone(),
                             correct_symbol: Token::StringLiteral(String::from("route")),
-                        }))
+                        })
                     }
                 }
             }
             "request" => {
                 cursor.next();
                 if cursor.peek().unwrap() != &Token::Encapsulator('<') {
-                    return Err(Box::new(ParserError::PoorClosure {
+                    return Err(ParserError::PoorClosure {
                         location: ParserErrorLocation::MethodInternal,
                         incorrect_encap: cursor.peek().unwrap().to_owned(),
                         correct_encap: Token::Encapsulator('<'),
-                    }));
+                    });
                 }
                 cursor.next();
                 let mut request_type_internal: Vec<Token> = Vec::new();
@@ -349,20 +348,20 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, Box<dyn Er
                 match &request_type_internal[0] {
                     Token::Word(w) => request_type = parse_request_type(w.to_string())?,
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::MethodInternal,
                             incorrect_symbol: request_type_internal[0].to_owned(),
                             correct_symbol: Token::Word(String::from("request_type")),
-                        }))
+                        })
                     }
                 }
 
                 if cursor.peek().unwrap() != &Token::Encapsulator('(') {
-                    return Err(Box::new(ParserError::PoorClosure {
+                    return Err(ParserError::PoorClosure {
                         location: ParserErrorLocation::MethodInternal,
                         incorrect_encap: cursor.peek().unwrap().to_owned(),
                         correct_encap: Token::Encapsulator('('),
-                    }));
+                    });
                 }
                 cursor.next();
                 let mut request_shape_internal: Vec<Token> = Vec::new();
@@ -384,11 +383,11 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, Box<dyn Er
             "return" => {
                 cursor.next();
                 if cursor.peek().unwrap() != &Token::Encapsulator('<') {
-                    return Err(Box::new(ParserError::PoorClosure {
+                    return Err(ParserError::PoorClosure {
                         location: ParserErrorLocation::MethodInternal,
                         incorrect_encap: cursor.peek().unwrap().to_owned(),
                         correct_encap: Token::Encapsulator('('),
-                    }));
+                    });
                 }
                 cursor.next();
                 let mut return_object_internal: Vec<Token> = Vec::new();
@@ -408,20 +407,20 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, Box<dyn Er
                 match &return_object_internal[0] {
                     Token::Word(w) => return_object = w.to_string(),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::MethodInternal,
                             incorrect_symbol: return_object_internal[0].to_owned(),
                             correct_symbol: Token::Word(String::from("return_object")),
-                        }))
+                        })
                     }
                 }
 
                 if cursor.peek().unwrap() != &Token::Encapsulator('(') {
-                    return Err(Box::new(ParserError::PoorClosure {
+                    return Err(ParserError::PoorClosure {
                         location: ParserErrorLocation::MethodInternal,
                         incorrect_encap: cursor.peek().unwrap().to_owned(),
                         correct_encap: Token::Encapsulator('('),
-                    }));
+                    });
                 };
                 cursor.next();
                 let mut return_shape_internal: Vec<Token> = Vec::new();
@@ -441,7 +440,7 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, Box<dyn Er
                 return_shape = parse_return_shape(return_shape_internal)?;
             }
             _ => {
-                return Err(Box::new(ParserError::InvalidSymbolBody {
+                return Err(ParserError::InvalidSymbolBody {
                     location: ParserErrorLocation::MethodInternal,
                     incorrect_symbol: cursor.peek().unwrap().to_owned(),
                     valid_symbols: vec![
@@ -449,7 +448,7 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, Box<dyn Er
                         "request".to_string(),
                         "return".to_string(),
                     ],
-                }));
+                });
             }
         }
     }
@@ -463,7 +462,7 @@ fn parse_method_internal(input: Vec<Token>) -> Result<MethodInternal, Box<dyn Er
     })
 }
 
-fn parse_type(input: String) -> Result<Type, Box<dyn Error>> {
+fn parse_type(input: String) -> Result<Type, ParserError> {
     match input.as_str() {
         "int" | "Integer" => Ok(Type::Integer),
         "bool" | "Boolean" => Ok(Type::Boolean),
@@ -471,7 +470,7 @@ fn parse_type(input: String) -> Result<Type, Box<dyn Error>> {
         "int?" | "Integer?" => Ok(Type::NullableInteger),
         "bool?" | "Boolean?" => Ok(Type::NullableBoolean),
         "str?" | "String?" => Ok(Type::NullableString),
-        _ => Err(Box::new(ParserError::InvalidSymbolBody {
+        _ => Err(ParserError::InvalidSymbolBody {
             location: ParserErrorLocation::Type,
             incorrect_symbol: Token::Word(input),
             valid_symbols: vec![
@@ -482,17 +481,17 @@ fn parse_type(input: String) -> Result<Type, Box<dyn Error>> {
                 "Boolean".to_string(),
                 "String".to_string(),
             ],
-        })),
+        }),
     }
 }
 
-fn parse_request_type(input: String) -> Result<RequestType, Box<dyn Error>> {
+fn parse_request_type(input: String) -> Result<RequestType, ParserError> {
     match input.as_str() {
         "GET" => Ok(RequestType::GET),
         "POST" => Ok(RequestType::POST),
         "PATCH" => Ok(RequestType::PATCH),
         "DELETE" => Ok(RequestType::DELETE),
-        _ => Err(Box::new(ParserError::InvalidSymbolBody {
+        _ => Err(ParserError::InvalidSymbolBody {
             location: ParserErrorLocation::RequestType,
             incorrect_symbol: Token::Word(input),
             valid_symbols: vec![
@@ -501,20 +500,20 @@ fn parse_request_type(input: String) -> Result<RequestType, Box<dyn Error>> {
                 "PATCH".to_string(),
                 "DELETE".to_string(),
             ],
-        })),
+        }),
     }
 }
 
-fn parse_request_shape(input: Vec<Token>) -> Result<RequestShape, Box<dyn Error>> {
+fn parse_request_shape(input: Vec<Token>) -> Result<RequestShape, ParserError> {
     let mut cursor = input.into_iter().peekable();
     let mut result = RequestShape::new();
 
     if cursor.peek().unwrap() != &Token::Encapsulator('{') {
-        return Err(Box::new(ParserError::PoorClosure {
+        return Err(ParserError::PoorClosure {
             location: ParserErrorLocation::RequestShape,
             incorrect_encap: cursor.peek().unwrap().to_owned(),
             correct_encap: Token::Encapsulator('{'),
-        }));
+        });
     }
     cursor.next();
     let mut request_shape_hashmap: Vec<Token> = Vec::new();
@@ -540,41 +539,41 @@ fn parse_request_shape(input: Vec<Token>) -> Result<RequestShape, Box<dyn Error>
                 match &chunk[0] {
                     Token::Word(w) => key_name = w.to_string(),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::RequestShape,
                             incorrect_symbol: chunk[0].to_owned(),
                             correct_symbol: Token::Word(String::from("param_name")),
-                        }))
+                        })
                     }
                 }
                 match &chunk[1] {
                     Token::Split(':') => {}
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::RequestShape,
                             incorrect_symbol: chunk[1].to_owned(),
                             correct_symbol: Token::Split(':'),
-                        }))
+                        })
                     }
                 }
                 match &chunk[2] {
                     Token::Word(w) => value = parse_method_shape_value(w.to_string()),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::RequestShape,
                             incorrect_symbol: chunk[2].to_owned(),
                             correct_symbol: Token::Word(String::from("param_value")),
-                        }))
+                        })
                     }
                 }
                 match &chunk[3] {
                     Token::Split(',') => {}
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::RequestShape,
                             incorrect_symbol: chunk[3].to_owned(),
                             correct_symbol: Token::Split(','),
-                        }))
+                        })
                     }
                 }
             }
@@ -582,40 +581,40 @@ fn parse_request_shape(input: Vec<Token>) -> Result<RequestShape, Box<dyn Error>
                 match &chunk[0] {
                     Token::Word(w) => key_name = w.to_string(),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::RequestShape,
                             incorrect_symbol: chunk[0].to_owned(),
                             correct_symbol: Token::Word(String::from("param_name")),
-                        }))
+                        })
                     }
                 }
                 match &chunk[1] {
                     Token::Split(':') => {}
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::RequestShape,
                             incorrect_symbol: chunk[1].to_owned(),
                             correct_symbol: Token::Split(':'),
-                        }))
+                        })
                     }
                 }
                 match &chunk[2] {
                     Token::Word(w) => value = parse_method_shape_value(w.to_string()),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::RequestShape,
                             incorrect_symbol: chunk[2].to_owned(),
                             correct_symbol: Token::Word(String::from("param_value")),
-                        }))
+                        })
                     }
                 }
             }
             _ => {
-                return Err(Box::new(ParserError::BadLength {
+                return Err(ParserError::BadLength {
                     location: ParserErrorLocation::RequestShape,
                     incorrect_length: chunk.len(),
                     valid_lengths: vec![4, 3],
-                }))
+                })
             }
         }
         result.insert(key_name, value);
@@ -636,16 +635,16 @@ fn parse_method_shape_value(input: String) -> Value {
     }
 }
 
-fn parse_return_shape(input: Vec<Token>) -> Result<ReturnShape, Box<dyn Error>> {
+fn parse_return_shape(input: Vec<Token>) -> Result<ReturnShape, ParserError> {
     let mut cursor = input.into_iter().peekable();
     let mut result = ReturnShape::new();
 
     if cursor.peek().unwrap() != &Token::Encapsulator('{') {
-        return Err(Box::new(ParserError::PoorClosure {
+        return Err(ParserError::PoorClosure {
             location: ParserErrorLocation::ReturnShape,
             incorrect_encap: cursor.peek().unwrap().to_owned(),
             correct_encap: Token::Encapsulator('{'),
-        }));
+        });
     }
     cursor.next();
     let mut return_shape_hashmap: Vec<Token> = Vec::new();
@@ -672,11 +671,11 @@ fn parse_return_shape(input: Vec<Token>) -> Result<ReturnShape, Box<dyn Error>> 
                     result.insert(w.to_string(), None);
                 }
                 _ => {
-                    return Err(Box::new(ParserError::MisplacedSymbol {
+                    return Err(ParserError::MisplacedSymbol {
                         location: ParserErrorLocation::ReturnShape,
                         incorrect_symbol: chunk[0].to_owned(),
                         correct_symbol: Token::Word(String::from("return_value")),
-                    }))
+                    })
                 }
             },
             3 => {
@@ -685,33 +684,33 @@ fn parse_return_shape(input: Vec<Token>) -> Result<ReturnShape, Box<dyn Error>> 
                 match &chunk[0] {
                     Token::Word(w) => value = w.to_string(),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::ReturnShape,
                             incorrect_symbol: chunk[0].to_owned(),
                             correct_symbol: Token::Word(String::from("return_value")),
-                        }))
+                        })
                     }
                 }
                 match &chunk[1] {
                     Token::Split(':') => {}
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::ReturnShape,
                             incorrect_symbol: chunk[1].to_owned(),
                             correct_symbol: Token::Split(':'),
-                        }))
+                        })
                     }
                 }
                 match &chunk[2] {
                     Token::StringLiteral(str_lit) => value_alias = str_lit.to_string(),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::ReturnShape,
                             incorrect_symbol: chunk[2].to_owned(),
                             correct_symbol: Token::StringLiteral(String::from(
                                 "return_value_alias",
                             )),
-                        }))
+                        })
                     }
                 }
 
@@ -719,11 +718,11 @@ fn parse_return_shape(input: Vec<Token>) -> Result<ReturnShape, Box<dyn Error>> 
             }
             0 => {}
             _ => {
-                return Err(Box::new(ParserError::BadLength {
+                return Err(ParserError::BadLength {
                     location: ParserErrorLocation::ReturnShape,
                     incorrect_length: chunk.len(),
                     valid_lengths: vec![3, 1, 0],
-                }))
+                })
             }
         }
     }
@@ -731,39 +730,39 @@ fn parse_return_shape(input: Vec<Token>) -> Result<ReturnShape, Box<dyn Error>> 
     Ok(result)
 }
 
-pub fn parse_object(input: Vec<Token>) -> Result<Object, Box<dyn Error>> {
+pub fn parse_object(input: Vec<Token>) -> Result<Object, ParserError> {
     let name: String;
     let mut shape: ObjectShape = ObjectShape::new();
     let mut methods: Vec<String> = Vec::new();
 
     let mut cursor = input.into_iter().peekable();
     if cursor.peek().unwrap() != &Token::Word(String::from("Object")) {
-        return Err(Box::new(ParserError::InvalidSymbolBody {
+        return Err(ParserError::InvalidSymbolBody {
             location: ParserErrorLocation::Object,
             incorrect_symbol: cursor.peek().unwrap().to_owned(),
             valid_symbols: vec!["Object".to_string()],
-        }));
+        });
     }
     cursor.next();
 
     match cursor.peek().unwrap() {
         Token::Word(w) => name = w.to_owned(),
         _ => {
-            return Err(Box::new(ParserError::MisplacedSymbol {
+            return Err(ParserError::MisplacedSymbol {
                 location: ParserErrorLocation::Object,
                 incorrect_symbol: cursor.peek().unwrap().to_owned(),
                 correct_symbol: Token::Word(String::from("object_name")),
-            }))
+            })
         }
     }
     cursor.next();
 
     if cursor.peek().unwrap() != &Token::Encapsulator('{') {
-        return Err(Box::new(ParserError::PoorClosure {
+        return Err(ParserError::PoorClosure {
             location: ParserErrorLocation::Object,
             incorrect_encap: cursor.peek().unwrap().to_owned(),
             correct_encap: Token::Encapsulator('{'),
-        }));
+        });
     }
     cursor.next();
     let mut internal: Vec<Token> = Vec::new();
@@ -786,11 +785,11 @@ pub fn parse_object(input: Vec<Token>) -> Result<Object, Box<dyn Error>> {
     match internal_cursor.peek().unwrap() {
         Token::Word(_) => {}
         _ => {
-            return Err(Box::new(ParserError::MisplacedSymbol {
+            return Err(ParserError::MisplacedSymbol {
                 location: ParserErrorLocation::Object,
                 incorrect_symbol: internal_cursor.peek().unwrap().to_owned(),
                 correct_symbol: Token::Word(String::from("function")),
-            }));
+            });
         }
     }
     internal_cursor.next();
@@ -800,11 +799,11 @@ pub fn parse_object(input: Vec<Token>) -> Result<Object, Box<dyn Error>> {
             "shape" => {
                 internal_cursor.next();
                 if internal_cursor.peek().unwrap() != &Token::Encapsulator('(') {
-                    return Err(Box::new(ParserError::PoorClosure {
+                    return Err(ParserError::PoorClosure {
                         location: ParserErrorLocation::Object,
                         incorrect_encap: internal_cursor.peek().unwrap().to_owned(),
                         correct_encap: Token::Encapsulator('('),
-                    }));
+                    });
                 }
                 internal_cursor.next();
                 let mut shape_internal: Vec<Token> = Vec::new();
@@ -826,11 +825,11 @@ pub fn parse_object(input: Vec<Token>) -> Result<Object, Box<dyn Error>> {
             "methods" => {
                 internal_cursor.next();
                 if internal_cursor.peek().unwrap() != &Token::Encapsulator('(') {
-                    return Err(Box::new(ParserError::PoorClosure {
+                    return Err(ParserError::PoorClosure {
                         location: ParserErrorLocation::Object,
                         incorrect_encap: internal_cursor.peek().unwrap().to_owned(),
                         correct_encap: Token::Encapsulator('('),
-                    }));
+                    });
                 }
                 internal_cursor.next();
                 let mut methods_internal: Vec<Token> = Vec::new();
@@ -850,11 +849,11 @@ pub fn parse_object(input: Vec<Token>) -> Result<Object, Box<dyn Error>> {
                 methods = parse_object_methods(methods_internal)?;
             }
             _ => {
-                return Err(Box::new(ParserError::InvalidSymbolBody {
+                return Err(ParserError::InvalidSymbolBody {
                     location: ParserErrorLocation::Object,
                     incorrect_symbol: internal_cursor.peek().unwrap().to_owned(),
                     valid_symbols: vec!["shape".to_string(), "methods".to_string()],
-                }))
+                })
             }
         }
     }
@@ -866,16 +865,16 @@ pub fn parse_object(input: Vec<Token>) -> Result<Object, Box<dyn Error>> {
     })
 }
 
-fn parse_object_methods(input: Vec<Token>) -> Result<Vec<String>, Box<dyn Error>> {
+fn parse_object_methods(input: Vec<Token>) -> Result<Vec<String>, ParserError> {
     let mut cursor = input.into_iter().peekable();
     let mut result: Vec<String> = Vec::new();
 
     if cursor.peek().unwrap() != &Token::Encapsulator('[') {
-        return Err(Box::new(ParserError::PoorClosure {
+        return Err(ParserError::PoorClosure {
             location: ParserErrorLocation::ObjectMethods,
             incorrect_encap: cursor.peek().unwrap().to_owned(),
             correct_encap: Token::Encapsulator('['),
-        }));
+        });
     }
     cursor.next();
     let mut object_methods_internal: Vec<Token> = Vec::new();
@@ -899,40 +898,40 @@ fn parse_object_methods(input: Vec<Token>) -> Result<Vec<String>, Box<dyn Error>
                 match &chunk[0] {
                     Token::Word(w) => result.push(w.to_string()),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::ObjectMethods,
                             incorrect_symbol: chunk[0].to_owned(),
                             correct_symbol: Token::Word(String::from("method_name")),
-                        }))
+                        })
                     }
                 }
                 match &chunk[1] {
                     Token::Split(',') => {}
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::ObjectMethods,
                             incorrect_symbol: chunk[1].to_owned(),
                             correct_symbol: Token::Split(','),
-                        }))
+                        })
                     }
                 }
             }
             1 => match &chunk[0] {
                 Token::Word(w) => result.push(w.to_string()),
                 _ => {
-                    return Err(Box::new(ParserError::MisplacedSymbol {
+                    return Err(ParserError::MisplacedSymbol {
                         location: ParserErrorLocation::ObjectMethods,
                         incorrect_symbol: chunk[0].to_owned(),
                         correct_symbol: Token::Word(String::from("method_name")),
-                    }))
+                    })
                 }
             },
             _ => {
-                return Err(Box::new(ParserError::BadLength {
+                return Err(ParserError::BadLength {
                     location: ParserErrorLocation::ObjectMethods,
                     incorrect_length: chunk.len(),
                     valid_lengths: vec![2, 1],
-                }))
+                })
             }
         }
     }
@@ -940,16 +939,16 @@ fn parse_object_methods(input: Vec<Token>) -> Result<Vec<String>, Box<dyn Error>
     Ok(result)
 }
 
-fn parse_object_shape(input: Vec<Token>) -> Result<ObjectShape, Box<dyn Error>> {
+fn parse_object_shape(input: Vec<Token>) -> Result<ObjectShape, ParserError> {
     let mut cursor = input.into_iter().peekable();
     let mut result = ObjectShape::new();
 
     if cursor.peek().unwrap() != &Token::Encapsulator('{') {
-        return Err(Box::new(ParserError::PoorClosure {
+        return Err(ParserError::PoorClosure {
             location: ParserErrorLocation::ObjectShape,
             incorrect_encap: cursor.peek().unwrap().to_owned(),
             correct_encap: Token::Encapsulator('{'),
-        }));
+        });
     }
     cursor.next();
     let mut object_shape_hashmap: Vec<Token> = Vec::new();
@@ -975,41 +974,41 @@ fn parse_object_shape(input: Vec<Token>) -> Result<ObjectShape, Box<dyn Error>> 
                 match &chunk[0] {
                     Token::Word(w) => name = w.to_string(),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::ObjectShape,
                             incorrect_symbol: chunk[0].to_owned(),
                             correct_symbol: Token::Word(String::from("object_shape_name")),
-                        }))
+                        })
                     }
                 }
                 match &chunk[1] {
                     Token::Split(':') => {}
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::ObjectShape,
                             incorrect_symbol: chunk[1].to_owned(),
                             correct_symbol: Token::Split(':'),
-                        }))
+                        })
                     }
                 }
                 match &chunk[2] {
                     Token::Word(w) => val_type = parse_type(w.to_string())?,
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::ObjectShape,
                             incorrect_symbol: chunk[2].to_owned(),
                             correct_symbol: Token::Word(String::from("object_shape_type")),
-                        }))
+                        })
                     }
                 }
                 match &chunk[3] {
                     Token::Split(',') => {}
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::ObjectShape,
                             incorrect_symbol: chunk[3].to_owned(),
                             correct_symbol: Token::Split(','),
-                        }))
+                        })
                     }
                 }
             }
@@ -1017,40 +1016,40 @@ fn parse_object_shape(input: Vec<Token>) -> Result<ObjectShape, Box<dyn Error>> 
                 match &chunk[0] {
                     Token::Word(w) => name = w.to_string(),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::ObjectShape,
                             incorrect_symbol: chunk[0].to_owned(),
                             correct_symbol: Token::Word(String::from("object_shape_name")),
-                        }))
+                        })
                     }
                 }
                 match &chunk[1] {
                     Token::Split(':') => {}
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::ObjectShape,
                             incorrect_symbol: chunk[1].to_owned(),
                             correct_symbol: Token::Split(':'),
-                        }))
+                        })
                     }
                 }
                 match &chunk[2] {
                     Token::Word(w) => val_type = parse_type(w.to_string())?,
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::ObjectShape,
                             incorrect_symbol: chunk[2].to_owned(),
                             correct_symbol: Token::Word(String::from("object_shape_type")),
-                        }))
+                        })
                     }
                 }
             }
             _ => {
-                return Err(Box::new(ParserError::BadLength {
+                return Err(ParserError::BadLength {
                     location: ParserErrorLocation::ObjectShape,
                     incorrect_length: chunk.len(),
                     valid_lengths: vec![4, 3],
-                }))
+                })
             }
         }
         result.insert(name, val_type);
@@ -1059,7 +1058,7 @@ fn parse_object_shape(input: Vec<Token>) -> Result<ObjectShape, Box<dyn Error>> 
     Ok(result)
 }
 
-pub fn parse_global(input: Vec<Token>) -> Result<Global, Box<dyn Error>> {
+pub fn parse_global(input: Vec<Token>) -> Result<Global, ParserError> {
     let name: String;
     let mut head_route: String = String::new();
     let mut shape: ObjectShape = ObjectShape::new();
@@ -1067,32 +1066,32 @@ pub fn parse_global(input: Vec<Token>) -> Result<Global, Box<dyn Error>> {
 
     let mut cursor = input.into_iter().peekable();
     if cursor.peek().unwrap() != &Token::Word(String::from("Global")) {
-        return Err(Box::new(ParserError::InvalidSymbolBody {
+        return Err(ParserError::InvalidSymbolBody {
             location: ParserErrorLocation::Global,
             incorrect_symbol: cursor.peek().unwrap().to_owned(),
             valid_symbols: vec!["Global".to_string()],
-        }));
+        });
     }
     cursor.next();
 
     match cursor.peek().unwrap() {
         Token::Word(w) => name = w.to_owned(),
         _ => {
-            return Err(Box::new(ParserError::MisplacedSymbol {
+            return Err(ParserError::MisplacedSymbol {
                 location: ParserErrorLocation::Global,
                 incorrect_symbol: cursor.peek().unwrap().to_owned(),
                 correct_symbol: Token::Word(String::from("global_object_name")),
-            }))
+            })
         }
     }
     cursor.next();
 
     if cursor.peek().unwrap() != &Token::Encapsulator('{') {
-        return Err(Box::new(ParserError::PoorClosure {
+        return Err(ParserError::PoorClosure {
             location: ParserErrorLocation::Global,
             incorrect_encap: cursor.peek().unwrap().to_owned(),
             correct_encap: Token::Encapsulator('{'),
-        }));
+        });
     }
     cursor.next();
     let mut internal: Vec<Token> = Vec::new();
@@ -1115,11 +1114,11 @@ pub fn parse_global(input: Vec<Token>) -> Result<Global, Box<dyn Error>> {
     match internal_cursor.peek().unwrap() {
         Token::Word(_) => {}
         _ => {
-            return Err(Box::new(ParserError::MisplacedSymbol {
+            return Err(ParserError::MisplacedSymbol {
                 location: ParserErrorLocation::Global,
                 incorrect_symbol: internal_cursor.peek().unwrap().to_owned(),
                 correct_symbol: Token::Word(String::from("function")),
-            }));
+            });
         }
     }
 
@@ -1128,11 +1127,11 @@ pub fn parse_global(input: Vec<Token>) -> Result<Global, Box<dyn Error>> {
             "headRoute" => {
                 internal_cursor.next();
                 if internal_cursor.peek().unwrap() != &Token::Encapsulator('(') {
-                    return Err(Box::new(ParserError::PoorClosure {
+                    return Err(ParserError::PoorClosure {
                         location: ParserErrorLocation::Global,
                         incorrect_encap: internal_cursor.peek().unwrap().to_owned(),
                         correct_encap: Token::Encapsulator('('),
-                    }));
+                    });
                 }
                 internal_cursor.next();
                 let mut route_internal: Vec<Token> = Vec::new();
@@ -1152,22 +1151,22 @@ pub fn parse_global(input: Vec<Token>) -> Result<Global, Box<dyn Error>> {
                 match &route_internal[0] {
                     Token::StringLiteral(str_lit) => head_route = str_lit.to_string(),
                     _ => {
-                        return Err(Box::new(ParserError::MisplacedSymbol {
+                        return Err(ParserError::MisplacedSymbol {
                             location: ParserErrorLocation::Global,
                             incorrect_symbol: route_internal[0].to_owned(),
                             correct_symbol: Token::StringLiteral(String::from("head_route")),
-                        }))
+                        })
                     }
                 }
             }
             "shape" => {
                 internal_cursor.next();
                 if internal_cursor.peek().unwrap() != &Token::Encapsulator('(') {
-                    return Err(Box::new(ParserError::PoorClosure {
+                    return Err(ParserError::PoorClosure {
                         location: ParserErrorLocation::Global,
                         incorrect_encap: internal_cursor.peek().unwrap().to_owned(),
                         correct_encap: Token::Encapsulator('('),
-                    }));
+                    });
                 }
                 internal_cursor.next();
                 let mut shape_internal: Vec<Token> = Vec::new();
@@ -1189,11 +1188,11 @@ pub fn parse_global(input: Vec<Token>) -> Result<Global, Box<dyn Error>> {
             "methods" => {
                 internal_cursor.next();
                 if internal_cursor.peek().unwrap() != &Token::Encapsulator('(') {
-                    return Err(Box::new(ParserError::PoorClosure {
+                    return Err(ParserError::PoorClosure {
                         location: ParserErrorLocation::Global,
                         incorrect_encap: internal_cursor.peek().unwrap().to_owned(),
                         correct_encap: Token::Encapsulator('('),
-                    }));
+                    });
                 }
                 internal_cursor.next();
                 let mut methods_internal: Vec<Token> = Vec::new();
@@ -1213,7 +1212,7 @@ pub fn parse_global(input: Vec<Token>) -> Result<Global, Box<dyn Error>> {
                 methods = parse_object_methods(methods_internal)?;
             }
             _ => {
-                return Err(Box::new(ParserError::InvalidSymbolBody {
+                return Err(ParserError::InvalidSymbolBody {
                     location: ParserErrorLocation::Global,
                     incorrect_symbol: internal_cursor.peek().unwrap().to_owned(),
                     valid_symbols: vec![
@@ -1221,7 +1220,7 @@ pub fn parse_global(input: Vec<Token>) -> Result<Global, Box<dyn Error>> {
                         "methods".to_string(),
                         "shape".to_string(),
                     ],
-                }))
+                })
             }
         }
     }
