@@ -782,6 +782,7 @@ pub fn parse_object(input: Vec<Token>) -> Result<Object, ParserError> {
     }
 
     let mut internal_cursor = internal.into_iter().peekable();
+    println!("{:?}", internal_cursor);
     match internal_cursor.peek().unwrap() {
         Token::Word(_) => {}
         _ => {
@@ -792,7 +793,6 @@ pub fn parse_object(input: Vec<Token>) -> Result<Object, ParserError> {
             });
         }
     }
-    internal_cursor.next();
 
     while let Some(Token::Word(w)) = internal_cursor.peek() {
         match w.as_str() {
