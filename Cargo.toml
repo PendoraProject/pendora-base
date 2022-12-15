@@ -2,6 +2,10 @@
 name = "pendora-base"
 version = "0.1.0"
 edition = "2021"
+authors = ["Hayden Brown <scratchcat458@gmail.com>"]
+description = "The parsing system for the Pendora syntax"
+homepage = "https://pendora-docs.web.app"
+repository = "https://github.com/PendoraProject/pendora-base"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

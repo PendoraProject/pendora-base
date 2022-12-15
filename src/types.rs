@@ -2,24 +2,24 @@ use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Project {
-    pub(crate) global: Global,
-    pub(crate) objects: HashMap<String, Object>,
-    pub(crate) methods: HashMap<String, Method>,
+    pub global: Global,
+    pub objects: HashMap<String, Object>,
+    pub methods: HashMap<String, Method>,
 }
 
 #[derive(Debug)]
 pub struct Global {
-    pub(crate) name: String,
-    pub(crate) head_route: String,
-    pub(crate) shape: ObjectShape,
-    pub(crate) methods: Vec<String>,
+    pub name: String,
+    pub head_route: String,
+    pub shape: ObjectShape,
+    pub methods: Vec<String>,
 }
 
 #[derive(Debug)]
 pub struct Object {
-    pub(crate) name: String,
-    pub(crate) shape: ObjectShape,
-    pub(crate) methods: Vec<String>,
+    pub name: String,
+    pub shape: ObjectShape,
+    pub methods: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -36,13 +36,13 @@ pub type ObjectShape = HashMap<String, Type>;
 
 #[derive(Debug)]
 pub struct Method {
-    pub(crate) name: String,
-    pub(crate) arguments: MethodArguments,
-    pub(crate) route: String,
-    pub(crate) request_shape: RequestShape,
-    pub(crate) request_type: RequestType,
-    pub(crate) return_shape: ReturnShape,
-    pub(crate) return_object: String,
+    pub name: String,
+    pub arguments: MethodArguments,
+    pub route: String,
+    pub request_shape: RequestShape,
+    pub request_type: RequestType,
+    pub return_shape: ReturnShape,
+    pub return_object: String,
 }
 
 pub type MethodArguments = HashMap<String, Type>;
