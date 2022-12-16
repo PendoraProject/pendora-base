@@ -14,8 +14,6 @@ pub fn parse_project(root: &str) -> Result<Project, ParserError> {
         let file_name = entry.file_name().to_str().unwrap();
 
         if entry.file_type().is_file() && file_name.ends_with(".pendora") {
-            println!("{}", path.display());
-
             let input = read_to_string(path).unwrap();
 
             let tokens = tokenise(input);
@@ -782,7 +780,6 @@ pub fn parse_object(input: Vec<Token>) -> Result<Object, ParserError> {
     }
 
     let mut internal_cursor = internal.into_iter().peekable();
-    println!("{:?}", internal_cursor);
     match internal_cursor.peek().unwrap() {
         Token::Word(_) => {}
         _ => {
